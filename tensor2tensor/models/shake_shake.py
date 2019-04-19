@@ -93,9 +93,9 @@ def shake_shake_block(x, output_filters, stride, hparams):
     #means_sum = tf.reduce_sum(means)
     #means_normal = means/means_sum
     rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-      for _ in range(num_branches)]
+                    for _ in range(num_branches)]
     rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-      for _ in range(num_branches)]
+                     for _ in range(num_branches)]
     means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
              for i in range(num_branches)]
     means = [tf.math.abs(x) for x in means]
@@ -106,7 +106,8 @@ def shake_shake_block(x, output_filters, stride, hparams):
     if hparams.weight_lower_bound:
       means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
       tf.summary.scalar('lower_bound', means_lower_treshhold)
-      means = (1-means_lower_treshhold*num_branches)*means_normal + means_lower_treshhold
+      means = [(1-means_lower_treshhold*num_branches)*means_normal[i] + means_lower_treshhold
+               for i in range(num_branches)]
     else:
       means = means_normal
 
