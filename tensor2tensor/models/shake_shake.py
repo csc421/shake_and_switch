@@ -86,13 +86,22 @@ def shake_shake_block(x, output_filters, stride, hparams):
   print('Original Shake Shake: ', hparams.original_shake_shake)
 
   if not hparams.original_shake_shake:
-    rand_forward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-    rand_backward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-    means = tf.get_variable('normalize_means', shape=[num_branches, 1, 1, 1, 1])
-    means = tf.math.abs(means)
-    means_sum = tf.reduce_sum(means)
+    #rand_forward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+    #rand_backward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+    #means = tf.get_variable('normalize_means', shape=[num_branches, 1, 1, 1, 1])
+    #means = tf.math.abs(means)
+    #means_sum = tf.reduce_sum(means)
+    #means_normal = means/means_sum
+    rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+      for _ in range(num_branches)]
+    rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+      for _ in range(num_branches)]
+    means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
+             for i in range(num_branches)]
+    means = [tf.math.abs(x) for x in means]
+    means_sum = tf.add_n(means)
+    means_normal = [x/means_sum for x in means]
 
-    means_normal = means/means_sum
     step = tf.to_float(tf.train.get_or_create_global_step())
     if hparams.weight_lower_bound:
       means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
@@ -101,8 +110,8 @@ def shake_shake_block(x, output_filters, stride, hparams):
     else:
       means = means_normal
 
-    rand_forward =  tf.math.multiply(means*2, rand_forward)
-    rand_backward = tf.math.multiply(means*2, rand_backward)
+    rand_forward =  [2*means[i]*rand_forward[i] for i in range(num_branches)]
+    rand_backward = [2*means[i]*rand_backward[i] for i in range(num_branches)]
     rand_eval = means_normal
 
     tf.summary.scalar('mean_0_', tf.squeeze(means[0]))
@@ -110,9 +119,9 @@ def shake_shake_block(x, output_filters, stride, hparams):
 
   else:
     rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-      for _ in range(hparams.shake_shake_num_branches)]
+      for _ in range(num_branches)]
     rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-      for _ in range(hparams.shake_shake_num_branches)]
+      for _ in range(num_branches)]
     rand_eval = [tf.constant(1.0/num_branches)]*num_branches
 
   # Normalize so that all sum to 1.

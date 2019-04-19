@@ -128,7 +128,7 @@ def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
         return x
 
 
-def lower_bound_scheduler(step, branch_numbers, train_steps, num_of_pieces=5):
+def lower_bound_scheduler(step, branch_numbers, train_steps):
   base_bound = tf.constant(1.0/branch_numbers)
   decay_steps = tf.constant(5*train_steps//6.0)
   ratio = step/decay_steps
