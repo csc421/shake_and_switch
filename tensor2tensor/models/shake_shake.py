@@ -110,7 +110,7 @@ def shake_shake_block(x, output_filters, stride, hparams):
     else:
       means = means_normal
 
-    rand_forward =  [2*means[i]*rand_forward[i] for i in range(num_branches)]
+    rand_forward = [2*means[i]*rand_forward[i] for i in range(num_branches)]
     rand_backward = [2*means[i]*rand_backward[i] for i in range(num_branches)]
     rand_eval = means_normal
 
@@ -125,10 +125,10 @@ def shake_shake_block(x, output_filters, stride, hparams):
     rand_eval = [tf.constant(1.0/num_branches)]*num_branches
 
   # Normalize so that all sum to 1.
-  total_forward = tf.reduce_sum(rand_forward, axis = 0, keep_dims=True)
-  total_backward = tf.reduce_sum(rand_backward, axis = 0, keep_dims=True)
-  rand_forward_normal = rand_forward/total_forward
-  rand_backward_normal = rand_backward/total_backward
+  total_forward = tf.add_n(rand_forward, axis = 0, keep_dims=True)
+  total_backward = tf.add_n(rand_backward, axis = 0, keep_dims=True)
+  rand_forward_normal = [samp/total_forward for samp in rand_forward]
+  rand_backward_normal = [samp/total_backward for samp in rand_backward]
 
   tf.summary.scalar('weight_0_', tf.squeeze(rand_forward_normal[0][0]))
   tf.summary.scalar('weight_1_',  tf.squeeze(rand_forward_normal[1][0]))
