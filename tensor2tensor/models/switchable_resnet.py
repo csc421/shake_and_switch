@@ -26,7 +26,6 @@ from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
 from operator import mul
 from tensorflow.python.keras import initializers
-
 import tensorflow as tf
 
 BATCH_NORM_DECAY = 0.9
@@ -34,78 +33,84 @@ BATCH_NORM_EPSILON = 1e-5
 
 
 def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
-    with tf.variable_scope(scope) :
+    with tf.variable_scope(scope):
         moving_mean_initializer = initializers.get('zeros')
         batch_size = x.shape[0]
-
         num_branches = 3
 
-        rand_forward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-        rand_backward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-        means = tf.get_variable('normalize_means', shape=[num_branches, 1, 1, 1, 1])
-        means = tf.math.abs(means)
-        means_sum = tf.reduce_sum(means)
+        rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+                        for _ in range(num_branches)]
+        rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+                         for _ in range(num_branches)]
+        means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
+                 for i in range(num_branches)]
+        means = [tf.math.abs(x) for x in means]
+        means_sum = tf.add_n(means)
+        means = [x / means_sum for x in means]
 
-        means_normal = means / means_sum
         step = tf.to_float(tf.train.get_or_create_global_step())
         if hparams.weight_lower_bound:
             means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
             tf.summary.scalar('lower_bound', means_lower_treshhold)
-            means = (1 - means_lower_treshhold * num_branches) * means_normal + means_lower_treshhold
-        else:
-            means = means_normal
-        rand_forward = tf.math.multiply(2*means, rand_forward)
-        rand_backward = tf.math.multiply(2*means, rand_backward)
+            means = [(1 - means_lower_treshhold * num_branches) * means[i] + means_lower_treshhold for i in
+                     range(num_branches)]
+        rand_forward = [2 * means[i] * rand_forward[i] for i in range(num_branches)]
+        rand_backward = [2 * means[i] * rand_backward[i] for i in range(num_branches)]
+        rand_eval = means
 
         tf.summary.scalar('mean_0_', tf.squeeze(means[0]))
         tf.summary.scalar('mean_1_', tf.squeeze(means[1]))
 
-        total_forward = tf.reduce_sum(rand_forward, axis=0, keep_dims=True)
-        total_backward = tf.reduce_sum(rand_backward, axis=0, keep_dims=True)
-        rand_forward_normal = rand_forward / total_forward
-        rand_backward_normal = rand_backward / total_backward
+        total_forward = tf.add_n(rand_forward)
+        total_backward = tf.add_n(rand_backward)
+        rand_forward_normal = [samp / total_forward for samp in rand_forward]
+        rand_backward_normal = [samp / total_backward for samp in rand_backward]
 
 
+        ch = None
+        if dataformat == "channels_first":
+            ch = x.shape[1]
+            intance_index = [2, 3]
+            batch_index = [0, 2, 3]
+            running_shape = [1, ch, 1, 1]
+        elif dataformat == "channels_last":
+            ch = x.shape[-1]
+            intance_index = [1, 2]
+            batch_index = [0, 1, 2]
+            running_shape = [1, 1, 1, ch]
+        else:
+            raise Exception("data format not defined")
+        layer_index = [1, 2, 3]
 
         running_mean = tf.get_variable(
             'running_mean',
-            shape=[1, 1, 1, x.shape[-1]],
+            shape=running_shape,
             initializer=moving_mean_initializer,
             trainable=False,
         )
 
         running_var = tf.get_variable(
             'running_var',
-            shape=[1, 1, 1, x.shape[-1]],
+            shape=running_shape,
             initializer=moving_mean_initializer,
             trainable=False,
         )
-
-        if dataformat == "channels_first":
-            ch = x.shape[1]
-            intance_index = [2, 3]
-            batch_index = [0, 2, 3]
-        elif dataformat == "channels_last":
-            ch = x.shape[-1]
-            intance_index = [1, 2]
-            batch_index = [0, 1, 2]
-        layer_index = [1, 2, 3]
 
         ins_mean, ins_var = tf.nn.moments(x, intance_index, keep_dims=True)
         layer_mean, layer_var = tf.nn.moments(x, layer_index, keep_dims=True)
         if is_training:
             batch_mean, batch_var = tf.nn.moments(x, batch_index, keep_dims=True)
-            new_running_mean = (BATCH_NORM_DECAY)*running_mean + (1-BATCH_NORM_DECAY)*batch_mean
+            new_running_mean = BATCH_NORM_DECAY*running_mean + (1-BATCH_NORM_DECAY)*batch_mean
             tf.assign(running_mean, new_running_mean)
-            new_running_var = (BATCH_NORM_DECAY)*running_var  + (1-BATCH_NORM_DECAY)*batch_var
+            new_running_var = BATCH_NORM_DECAY*running_var + (1-BATCH_NORM_DECAY)*batch_var
             tf.assign(running_var, new_running_var)
 
         else:
             batch_mean = running_mean
-            batch_var  = running_var
+            batch_var = running_var
 
-        gamma = tf.get_variable("gamma", [ch], initializer=tf.constant_initializer(1.0))
-        beta = tf.get_variable("beta", [ch], initializer=tf.constant_initializer(0.0))
+        gamma = tf.get_variable("gamma", running_shape, initializer=tf.constant_initializer(1.0))
+        beta = tf.get_variable("beta", running_shape, initializer=tf.constant_initializer(0.0))
 
         #mean_weight = tf.nn.softmax(tf.get_variable("mean_weight", [3], initializer=tf.constant_initializer(1.0)))
         #var_wegiht = tf.nn.softmax(tf.get_variable("var_weight", [3], initializer=tf.constant_initializer(1.0)))
@@ -115,13 +120,13 @@ def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
         if is_training:
             tmp_mean_back = sum(map(mul, norm_mean_list, rand_backward_normal))
             tmp_mean_forw = sum(map(mul, norm_mean_list, rand_forward_normal))
-            switchable_mean = tmp_mean_back + tf.stop_gradient(tmp_mean_forw -  tmp_mean_back)
+            switchable_mean = tmp_mean_back + tf.stop_gradient(tmp_mean_forw - tmp_mean_back)
             tmp_var_back = sum(map(mul, norm_var_list, rand_backward_normal))
             tmp_var_forw = sum(map(mul, norm_var_list, rand_forward_normal))
             switchable_var = tmp_var_back + tf.stop_gradient(tmp_var_forw - tmp_var_back)
         else:
-            switchable_mean = sum(map(mul, norm_mean_list, means_normal))
-            switchable_var = sum(map(mul, norm_var_list, means_normal))
+            switchable_mean = sum(map(mul, norm_mean_list, rand_eval))
+            switchable_var = sum(map(mul, norm_var_list, rand_eval))
 
         x = (x - switchable_mean) / (tf.sqrt(switchable_var + BATCH_NORM_EPSILON))
         x = x * gamma + beta
@@ -130,10 +135,9 @@ def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
 
 def lower_bound_scheduler(step, branch_numbers, train_steps):
   base_bound = tf.constant(1.0/branch_numbers)
-  decay_steps = tf.constant(5*train_steps//6.0)
-  ratio = step/decay_steps
-  return (1-ratio)*base_bound
-
+  decay_steps = tf.constant(5.0*train_steps//6.0)
+  ratio = tf.math.maximum(0.0, (1.0-step/decay_steps))
+  return ratio*base_bound
 
 
 def batch_norm_relu(inputs,

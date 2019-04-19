@@ -78,51 +78,32 @@ def shake_shake_block(x, output_filters, stride, hparams):
   """Builds a full shake-shake sub layer."""
   is_training = hparams.mode == tf.estimator.ModeKeys.TRAIN
   batch_size = common_layers.shape_list(x)[0]
-
   num_branches = hparams.shake_shake_num_branches
-
-
-
-  print('Original Shake Shake: ', hparams.original_shake_shake)
-
+  rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+                  for _ in range(num_branches)]
+  rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+                   for _ in range(num_branches)]
   if not hparams.original_shake_shake:
-    #rand_forward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-    #rand_backward = tf.random_uniform([num_branches, batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-    #means = tf.get_variable('normalize_means', shape=[num_branches, 1, 1, 1, 1])
-    #means = tf.math.abs(means)
-    #means_sum = tf.reduce_sum(means)
-    #means_normal = means/means_sum
-    rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-                    for _ in range(num_branches)]
-    rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-                     for _ in range(num_branches)]
     means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
              for i in range(num_branches)]
     means = [tf.math.abs(x) for x in means]
     means_sum = tf.add_n(means)
-    means_normal = [x/means_sum for x in means]
+    means = [x/means_sum for x in means]
 
     step = tf.to_float(tf.train.get_or_create_global_step())
     if hparams.weight_lower_bound:
       means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
       tf.summary.scalar('lower_bound', means_lower_treshhold)
-      means = [(1-means_lower_treshhold*num_branches)*means_normal[i] + means_lower_treshhold
-               for i in range(num_branches)]
-    else:
-      means = means_normal
+      means = [(1-means_lower_treshhold*num_branches)*means[i] + means_lower_treshhold for i in range(num_branches)]
 
     rand_forward = [2*means[i]*rand_forward[i] for i in range(num_branches)]
     rand_backward = [2*means[i]*rand_backward[i] for i in range(num_branches)]
-    rand_eval = means_normal
+    rand_eval = means
 
     tf.summary.scalar('mean_0_', tf.squeeze(means[0]))
     tf.summary.scalar('mean_1_',  tf.squeeze(means[1]))
 
   else:
-    rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-      for _ in range(num_branches)]
-    rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-      for _ in range(num_branches)]
     rand_eval = [tf.constant(1.0/num_branches)]*num_branches
 
   # Normalize so that all sum to 1.
@@ -156,11 +137,12 @@ def shake_shake_block(x, output_filters, stride, hparams):
     return res + tf.add_n(branches)
 
 
-def lower_bound_scheduler(step, branch_numbers, train_steps, num_of_pieces=5):
+def lower_bound_scheduler(step, branch_numbers, train_steps):
   base_bound = tf.constant(1.0/branch_numbers)
-  # decay_steps = tf.constant(5*train_steps//6)
-  # ratio = tf.cond(step<decay_steps, (1-step/decay_steps)*base_bound, 0)
-  return base_bound
+  decay_steps = tf.constant(5.0*train_steps//6.0)
+  ratio = tf.math.maximum(0.0, (1.0-step/decay_steps))
+  return ratio*base_bound
+
 
 def shake_shake_layer(x, output_filters, num_blocks, stride, hparams):
   """Builds many sub layers into one full layer."""
