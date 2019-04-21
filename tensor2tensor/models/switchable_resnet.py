@@ -539,7 +539,7 @@ def block_layer(inputs,
       keep_prob=keep_prob)
 
   for i in range(1, blocks):
-    with tf.variable_scope('layer {}'.format(i)):
+    with tf.variable_scope('block_{}'.format(i)):
         inputs = block_fn(
             inputs,
             filters,
@@ -590,59 +590,63 @@ def resnet_v2(inputs,
   Returns:
     Pre-logit activations.
   """
-  inputs = block_layer(
-      inputs=inputs,
-      filters=filters[1],
-      block_fn=block_fn,
-      blocks=layers[0],
-      strides=1,
-      is_training=is_training,
-      name="block_layer1",
-      hparams=hparams,
-      data_format=data_format,
-      use_td=use_td,
-      targeting_rate=targeting_rate,
-      keep_prob=keep_prob)
-  inputs = block_layer(
-      inputs=inputs,
-      filters=filters[2],
-      block_fn=block_fn,
-      blocks=layers[1],
-      strides=2,
-      is_training=is_training,
-      name="block_layer2",
-      hparams=hparams,
-      data_format=data_format,
-      use_td=use_td,
-      targeting_rate=targeting_rate,
-      keep_prob=keep_prob)
-  inputs = block_layer(
-      inputs=inputs,
-      filters=filters[3],
-      block_fn=block_fn,
-      blocks=layers[2],
-      strides=2,
-      is_training=is_training,
-      name="block_layer3",
-      hparams=hparams,
-      data_format=data_format,
-      use_td=use_td,
-      targeting_rate=targeting_rate,
-      keep_prob=keep_prob)
+  with tf.variable_scope('block_group_1'):
+      inputs = block_layer(
+          inputs=inputs,
+          filters=filters[1],
+          block_fn=block_fn,
+          blocks=layers[0],
+          strides=1,
+          is_training=is_training,
+          name="block_layer1",
+          hparams=hparams,
+          data_format=data_format,
+          use_td=use_td,
+          targeting_rate=targeting_rate,
+          keep_prob=keep_prob)
+  with tf.variable_scope('block_group_2'):
+      inputs = block_layer(
+          inputs=inputs,
+          filters=filters[2],
+          block_fn=block_fn,
+          blocks=layers[1],
+          strides=2,
+          is_training=is_training,
+          name="block_layer2",
+          hparams=hparams,
+          data_format=data_format,
+          use_td=use_td,
+          targeting_rate=targeting_rate,
+          keep_prob=keep_prob)
+  with tf.variable_scope('block_group_3'):
+      inputs = block_layer(
+          inputs=inputs,
+          filters=filters[3],
+          block_fn=block_fn,
+          blocks=layers[2],
+          strides=2,
+          is_training=is_training,
+          name="block_layer3",
+          hparams=hparams,
+          data_format=data_format,
+          use_td=use_td,
+          targeting_rate=targeting_rate,
+          keep_prob=keep_prob)
   if not is_cifar:
-    inputs = block_layer(
-        inputs=inputs,
-        filters=filters[4],
-        block_fn=block_fn,
-        blocks=layers[3],
-        strides=2,
-        is_training=is_training,
-        name="block_layer4",
-        hparams=hparams,
-        data_format=data_format,
-        use_td=use_td,
-        targeting_rate=targeting_rate,
-        keep_prob=keep_prob)
+    with tf.variable_scope('block_group_4'):
+        inputs = block_layer(
+            inputs=inputs,
+            filters=filters[4],
+            block_fn=block_fn,
+            blocks=layers[3],
+            strides=2,
+            is_training=is_training,
+            name="block_layer4",
+            hparams=hparams,
+            data_format=data_format,
+            use_td=use_td,
+            targeting_rate=targeting_rate,
+            keep_prob=keep_prob)
 
   return inputs
 
@@ -654,6 +658,7 @@ class SwitchableResnet(t2t_model.T2TModel):
   def body(self, features):
     print("#Using Relu",  self.hparams.relu_first)
     print("#Using Is Switchable", self.hparams.is_switchable)
+    print("#IS original shake shake", self.hparams.original_shake_shake)
     hp = self.hparams
     block_fns = {
         "residual": residual_block,
