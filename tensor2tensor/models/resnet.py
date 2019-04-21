@@ -640,6 +640,7 @@ def resnet_base():
   # (base_lr=0.1) * (batch_size=128*8 (on TPU, or 8 GPUs)=1024) / (256.)
   hparams.learning_rate = 0.4
   hparams.learning_rate_decay_scheme = "cosine"
+
   # For image_imagenet224, 120k training steps, which effectively makes this a
   # cosine decay (i.e. no cycles).
   hparams.learning_rate_cosine_cycle_steps = 120000

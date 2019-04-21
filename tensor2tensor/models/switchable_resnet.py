@@ -19,8 +19,6 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
-from tensor2tensor.layers import common_hparams
 from tensor2tensor.layers import common_layers
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
@@ -42,32 +40,30 @@ def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
                         for _ in range(num_branches)]
         rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
                          for _ in range(num_branches)]
-        means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
-                 for i in range(num_branches)]
-        means = [tf.math.abs(x) for x in means]
-        means_sum = tf.add_n(means)
-        means = [x / means_sum for x in means]
+        if not hparams.original_shake_shake:
+            means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
+            for i in range(num_branches)]
+            means = [tf.math.abs(x) for x in means]
+            means_sum = tf.add_n(means)
+            means = [x / means_sum for x in means]
 
-        step = tf.to_float(tf.train.get_or_create_global_step())
-        if hparams.weight_lower_bound:
-            means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
-            tf.summary.scalar('lower_bound', means_lower_treshhold)
-            means = [(1 - means_lower_treshhold * num_branches) * means[i] + means_lower_treshhold for i in
-                     range(num_branches)]
-        rand_forward = [2 * means[i] * rand_forward[i] for i in range(num_branches)]
-        rand_backward = [2 * means[i] * rand_backward[i] for i in range(num_branches)]
-        rand_eval = means
-
-        tf.summary.scalar('mean_0_', tf.squeeze(means[0]))
-        tf.summary.scalar('mean_1_', tf.squeeze(means[1]))
+            step = tf.to_float(tf.train.get_or_create_global_step())
+            if hparams.weight_lower_bound:
+                means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
+                tf.summary.scalar('lower_bound', means_lower_treshhold)
+                means = [(1 - means_lower_treshhold * num_branches) * means[i] + means_lower_treshhold for i in
+                range(num_branches)]
+                rand_forward = [2 * means[i] * rand_forward[i] for i in range(num_branches)]
+                rand_backward = [2 * means[i] * rand_backward[i] for i in range(num_branches)]
+                rand_eval = means
+                tf.summary.scalar('mean_0_', tf.squeeze(means[0]))
+                tf.summary.scalar('mean_1_', tf.squeeze(means[1]))
 
         total_forward = tf.add_n(rand_forward)
         total_backward = tf.add_n(rand_backward)
         rand_forward_normal = [samp / total_forward for samp in rand_forward]
         rand_backward_normal = [samp / total_backward for samp in rand_backward]
 
-
-        ch = None
         if dataformat == "channels_first":
             ch = x.shape[1]
             intance_index = [2, 3]

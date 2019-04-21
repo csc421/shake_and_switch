@@ -221,7 +221,6 @@ def shake_shake_piece_wise():
   boundary_epochs = [40, 90, 140, 190, 240]
   hparams.learning_rate_boundaries = [steps_per_epoch * be for be in boundary_epochs]
   hparams.learning_rate_multiples = [0.3, 0.1, 0.03, 0.01, 0.003]
-
   return hparams
 
 
