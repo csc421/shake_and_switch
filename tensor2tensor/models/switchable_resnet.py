@@ -32,15 +32,18 @@ BATCH_NORM_EPSILON = 1e-5
 
 def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
     with tf.variable_scope(scope):
-        moving_mean_initializer = initializers.get('zeros')
-        batch_size = x.shape[0]
-        num_branches = 3
+        print("*************************************************************************************")
 
+        moving_mean_initializer = initializers.get('zeros')
+        batch_size = hparams.batch_size
+        num_branches = 3
+        print("X SHAPE: {}".format(x.shape))
         rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
                         for _ in range(num_branches)]
         rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
                          for _ in range(num_branches)]
         if not hparams.original_shake_shake:
+            print("#####################################################################################")
             means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
             for i in range(num_branches)]
             means = [tf.math.abs(x) for x in means]
@@ -48,6 +51,7 @@ def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
             means = [x / means_sum for x in means]
 
             step = tf.to_float(tf.train.get_or_create_global_step())
+            print("++++++++++#!$#@$!@#$!@$,lowerbound:{}".format(hparams.weight_lower_bound))
             if hparams.weight_lower_bound:
                 means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
                 tf.summary.scalar('lower_bound', means_lower_treshhold)
@@ -535,17 +539,18 @@ def block_layer(inputs,
       keep_prob=keep_prob)
 
   for i in range(1, blocks):
-    inputs = block_fn(
-        inputs,
-        filters,
-        is_training,
-        None,
-        1, (i + 1 == blocks),
-        hparams,
-        data_format,
-        use_td=use_td,
-        targeting_rate=targeting_rate,
-        keep_prob=keep_prob)
+    with tf.variable_scope('layer {}'.format(i)):
+        inputs = block_fn(
+            inputs,
+            filters,
+            is_training,
+            None,
+            1, (i + 1 == blocks),
+            hparams,
+            data_format,
+            use_td=use_td,
+            targeting_rate=targeting_rate,
+            keep_prob=keep_prob)
 
   return tf.identity(inputs, name)
 
