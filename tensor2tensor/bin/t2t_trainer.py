@@ -142,6 +142,10 @@ flags.DEFINE_bool("relu_first", False,
 flags.DEFINE_bool("is_switchable", False,
                   "Using switchable normalization block")
 
+
+flags.DEFINE_bool("original_switchable", False,
+                  "Using original switchable without any random noise")
+
 def set_hparams_from_args(args):
   """Set hparams overrides from unparsed args list."""
   if not args:
@@ -212,7 +216,8 @@ def create_experiment_fn():
       weight_lower_bound=FLAGS.weight_lower_bound,
       original_shake_shake=FLAGS.original_shake_shake,
       relu_first = FLAGS.relu_first,
-      is_switchable = FLAGS.is_switchable
+      is_switchable = FLAGS.is_switchable,
+      original_switchable=FLAGS.original_switchable
   )
 
 

@@ -731,6 +731,19 @@ def resnet_cifar_32():
   hp.layer_sizes = [5, 5, 5]
   return hp
 
+@registry.register_hparams
+def resnet_cifar_32_mine():
+  hp = resnet_cifar_15()
+  hp.layer_sizes = [5, 5, 5]
+  hp.learning_rate_decay_scheme = "piecewise"
+  CIFAR_NUM_IMAGES = 50000
+  steps_per_epoch = CIFAR_NUM_IMAGES//hp.batch_size
+  boundary_epochs = [40, 90, 140, 190, 240]
+  hp.learning_rate_boundaries = [steps_per_epoch * be for be in boundary_epochs]
+  hp.learning_rate_multiples = [0.3, 0.1, 0.03, 0.01, 0.003]
+  hp.learning_rate = 0.2
+
+  return hp
 
 @registry.register_hparams
 def resnet_cifar_32_td_weight_05_05():

@@ -681,6 +681,7 @@ def create_experiment(
     original_shake_shake=False,
     relu_first=False,
     is_switchable=True,
+    original_switchable=False
 ):
   """Create Experiment."""
   # HParams
@@ -697,6 +698,8 @@ def create_experiment(
   hparams.add_hparam("original_shake_shake", original_shake_shake)
   hparams.add_hparam("relu_first", relu_first)
   hparams.add_hparam("is_switchable", is_switchable)
+  hparams.add_hparam("original_switchable", original_switchable)
+
 
 
   if decode_hparams is not None:

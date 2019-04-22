@@ -22,125 +22,15 @@ from __future__ import print_function
 from tensor2tensor.layers import common_layers
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
-from operator import mul
-from tensorflow.python.keras import initializers
 import tensorflow as tf
+from ..layers.swichable_norm import switch_norm
 
 BATCH_NORM_DECAY = 0.9
 BATCH_NORM_EPSILON = 1e-5
 
 
-def switch_norm(x, hparams, dataformat, is_training, scope='switch_norm'):
-    with tf.variable_scope(scope):
-        print("*************************************************************************************")
 
-        moving_mean_initializer = initializers.get('zeros')
-        batch_size = hparams.batch_size
-        num_branches = 3
-        print("X SHAPE: {}".format(x.shape))
-        rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-                        for _ in range(num_branches)]
-        rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-                         for _ in range(num_branches)]
-        if not hparams.original_shake_shake:
-            print("#####################################################################################")
-            means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
-            for i in range(num_branches)]
-            means = [tf.math.abs(x) for x in means]
-            means_sum = tf.add_n(means)
-            means = [x / means_sum for x in means]
-
-            step = tf.to_float(tf.train.get_or_create_global_step())
-            print("++++++++++#!$#@$!@#$!@$,lowerbound:{}".format(hparams.weight_lower_bound))
-            if hparams.weight_lower_bound:
-                means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
-                tf.summary.scalar('lower_bound', means_lower_treshhold)
-                means = [(1 - means_lower_treshhold * num_branches) * means[i] + means_lower_treshhold for i in
-                range(num_branches)]
-                rand_forward = [2 * means[i] * rand_forward[i] for i in range(num_branches)]
-                rand_backward = [2 * means[i] * rand_backward[i] for i in range(num_branches)]
-                rand_eval = means
-                tf.summary.scalar('mean_0_', tf.squeeze(means[0]))
-                tf.summary.scalar('mean_1_', tf.squeeze(means[1]))
-
-        total_forward = tf.add_n(rand_forward)
-        total_backward = tf.add_n(rand_backward)
-        rand_forward_normal = [samp / total_forward for samp in rand_forward]
-        rand_backward_normal = [samp / total_backward for samp in rand_backward]
-
-        if dataformat == "channels_first":
-            ch = x.shape[1]
-            intance_index = [2, 3]
-            batch_index = [0, 2, 3]
-            running_shape = [1, ch, 1, 1]
-        elif dataformat == "channels_last":
-            ch = x.shape[-1]
-            intance_index = [1, 2]
-            batch_index = [0, 1, 2]
-            running_shape = [1, 1, 1, ch]
-        else:
-            raise Exception("data format not defined")
-        layer_index = [1, 2, 3]
-
-        running_mean = tf.get_variable(
-            'running_mean',
-            shape=running_shape,
-            initializer=moving_mean_initializer,
-            trainable=False,
-        )
-
-        running_var = tf.get_variable(
-            'running_var',
-            shape=running_shape,
-            initializer=moving_mean_initializer,
-            trainable=False,
-        )
-
-        ins_mean, ins_var = tf.nn.moments(x, intance_index, keep_dims=True)
-        layer_mean, layer_var = tf.nn.moments(x, layer_index, keep_dims=True)
-        if is_training:
-            batch_mean, batch_var = tf.nn.moments(x, batch_index, keep_dims=True)
-            new_running_mean = BATCH_NORM_DECAY*running_mean + (1-BATCH_NORM_DECAY)*batch_mean
-            tf.assign(running_mean, new_running_mean)
-            new_running_var = BATCH_NORM_DECAY*running_var + (1-BATCH_NORM_DECAY)*batch_var
-            tf.assign(running_var, new_running_var)
-
-        else:
-            batch_mean = running_mean
-            batch_var = running_var
-
-        gamma = tf.get_variable("gamma", running_shape, initializer=tf.constant_initializer(1.0))
-        beta = tf.get_variable("beta", running_shape, initializer=tf.constant_initializer(0.0))
-
-        #mean_weight = tf.nn.softmax(tf.get_variable("mean_weight", [3], initializer=tf.constant_initializer(1.0)))
-        #var_wegiht = tf.nn.softmax(tf.get_variable("var_weight", [3], initializer=tf.constant_initializer(1.0)))
-        norm_mean_list = [batch_mean, ins_mean, layer_mean]
-        norm_var_list = [batch_var, ins_var, layer_var]
-
-        if is_training:
-            tmp_mean_back = sum(map(mul, norm_mean_list, rand_backward_normal))
-            tmp_mean_forw = sum(map(mul, norm_mean_list, rand_forward_normal))
-            switchable_mean = tmp_mean_back + tf.stop_gradient(tmp_mean_forw - tmp_mean_back)
-            tmp_var_back = sum(map(mul, norm_var_list, rand_backward_normal))
-            tmp_var_forw = sum(map(mul, norm_var_list, rand_forward_normal))
-            switchable_var = tmp_var_back + tf.stop_gradient(tmp_var_forw - tmp_var_back)
-        else:
-            switchable_mean = sum(map(mul, norm_mean_list, rand_eval))
-            switchable_var = sum(map(mul, norm_var_list, rand_eval))
-
-        x = (x - switchable_mean) / (tf.sqrt(switchable_var + BATCH_NORM_EPSILON))
-        x = x * gamma + beta
-        return x
-
-
-def lower_bound_scheduler(step, branch_numbers, train_steps):
-  base_bound = tf.constant(1.0/branch_numbers)
-  decay_steps = tf.constant(5.0*train_steps//6.0)
-  ratio = tf.math.maximum(0.0, (1.0-step/decay_steps))
-  return ratio*base_bound
-
-
-def batch_norm_relu(inputs,
+def batch_norm(inputs,
                     is_training,
                     init_zero=False,
                     data_format="channels_first"):
@@ -188,17 +78,23 @@ def normalization(inputs,
                   hparams,
                   data_format,
                   relu=True,
-                  init_zero=False):
+                  init_zero=False,
+                  scope='switch_norm'):
     is_training = (hparams.mode == tf.estimator.ModeKeys.TRAIN)
+    with tf.variable_scope(scope):
+        if hparams.relu_first & relu:
+           inputs = tf.nn.relu(inputs)
+        print('data format', data_format)
 
-    if hparams.relu_first & relu:
-       inputs = tf.nn.relu(inputs)
-    if hparams.is_switchable:
-       inputs = switch_norm(inputs, hparams, data_format, is_training)
-    else:
-       inputs = batch_norm_relu(inputs, is_training,  data_format=data_format, init_zero=init_zero)
-    if (not hparams.relu_first & relu):
-        inputs = tf.nn.relu(inputs)
+        if hparams.is_switchable:
+           print("NOT BATCH NORMALIZATION")
+           inputs = switch_norm(inputs, hparams, dataformat=data_format, is_training=is_training, scope='switch_norm')
+
+        else:
+           print("BATCH NORMALIZATION")
+           inputs = batch_norm(inputs, is_training,  data_format=data_format, init_zero=init_zero)
+        if (not hparams.relu_first & relu):
+            inputs = tf.nn.relu(inputs)
     return inputs
 
 
@@ -350,7 +246,7 @@ def residual_block(inputs,
   del final_block
   shortcut = inputs
   inputs = normalization(inputs,
-                  hparams, data_format=data_format)
+                  hparams, data_format=data_format, scope='1')
 
   if projection_shortcut is not None:
     shortcut = projection_shortcut(inputs)
@@ -367,7 +263,7 @@ def residual_block(inputs,
       is_training=is_training)
 
   inputs = normalization(inputs,
-                  hparams, data_format)
+                  hparams, data_format, scope='2')
   inputs = conv2d_fixed_padding(
       inputs=inputs,
       filters=filters,
@@ -438,7 +334,7 @@ def bottleneck_block(inputs,
       keep_prob=keep_prob,
       is_training=is_training)
 
-  inputs = normalization(inputs, hparams, data_format=data_format)
+  inputs = normalization(inputs, hparams, data_format=data_format, scope='3')
   inputs = conv2d_fixed_padding(
       inputs=inputs,
       filters=filters,
@@ -450,7 +346,7 @@ def bottleneck_block(inputs,
       keep_prob=keep_prob,
       is_training=is_training)
 
-  inputs = normalization(inputs, hparams, data_format=data_format)
+  inputs = normalization(inputs, hparams, data_format=data_format, scope='4')
   inputs = conv2d_fixed_padding(
       inputs=inputs,
       filters=4 * filters,
@@ -465,7 +361,7 @@ def bottleneck_block(inputs,
                          hparams,
                          relu=False,
                          init_zero=final_block,
-                         data_format=data_format)
+                         data_format=data_format,scope='5')
   return tf.nn.relu(inputs + shortcut)
 
 
@@ -522,7 +418,7 @@ def block_layer(inputs,
         is_training=is_training)
 
     return normalization(
-        inputs, hparams, relu=False, data_format=data_format)
+        inputs, hparams, relu=False, data_format=data_format, scope='6')
 
   # Only the first block per block_layer uses projection_shortcut and strides
   inputs = block_fn(
@@ -590,6 +486,7 @@ def resnet_v2(inputs,
   Returns:
     Pre-logit activations.
   """
+  print("hparams eval esteps", hparams.eval_steps)
   with tf.variable_scope('block_group_1'):
       inputs = block_layer(
           inputs=inputs,
@@ -656,7 +553,7 @@ class SwitchableResnet(t2t_model.T2TModel):
 
 
   def body(self, features):
-    print("#Using Relu",  self.hparams.relu_first)
+    print("#Relu First",  self.hparams.relu_first)
     print("#Using Is Switchable", self.hparams.is_switchable)
     print("#IS original shake shake", self.hparams.original_shake_shake)
     hp = self.hparams
@@ -685,7 +582,8 @@ class SwitchableResnet(t2t_model.T2TModel):
         strides=1 if hp.is_cifar else 2,
         data_format=data_format)
     inputs = tf.identity(inputs, "initial_conv")
-    inputs = normalization(inputs, hp, data_format=data_format)
+    with tf.variable_scope('after_conv_ident'):
+        inputs = normalization(inputs, hp, data_format=data_format, scope='7')
 
     if not hp.is_cifar:
       inputs = tf.layers.max_pooling2d(
@@ -696,18 +594,19 @@ class SwitchableResnet(t2t_model.T2TModel):
           data_format=data_format)
       inputs = tf.identity(inputs, "initial_max_pool")
 
-    out = resnet_v2(
-        inputs,
-        block_fns[hp.block_fn],
-        hp.layer_sizes,
-        hp.filter_sizes,
-        hp,
-        data_format,
-        is_training=is_training,
-        is_cifar=hp.is_cifar,
-        use_td=hp.use_td,
-        targeting_rate=hp.targeting_rate,
-        keep_prob=hp.keep_prob)
+    with tf.variable_scope("rest_of_net"):
+        out = resnet_v2(
+            inputs,
+            block_fns[hp.block_fn],
+            hp.layer_sizes,
+            hp.filter_sizes,
+            hp,
+            data_format,
+            is_training=is_training,
+            is_cifar=hp.is_cifar,
+            use_td=hp.use_td,
+            targeting_rate=hp.targeting_rate,
+            keep_prob=hp.keep_prob)
 
     if hp.use_nchw:
       out = tf.transpose(out, [0, 2, 3, 1])
