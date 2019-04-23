@@ -23,7 +23,7 @@ from tensor2tensor.layers import common_layers
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
 import tensorflow as tf
-from ..layers.swichable_norm import switch_norm
+from ..layers.swichable_norm import switch_norm as sn
 
 BATCH_NORM_DECAY = 0.9
 BATCH_NORM_EPSILON = 1e-5
@@ -71,7 +71,44 @@ def batch_norm(inputs,
 
   return inputs
 
+def switch_norm(inputs,
+                hparams,
+                    is_training,
+                    init_zero=False,
+                    data_format="channels_first"):
+  """Performs a batch normalization followed by a ReLU.
 
+  Args:
+    inputs: `Tensor` of shape `[batch, channels, ...]`.
+    is_training: `bool` for whether the model is training.
+    relu: `bool` if False, omits the ReLU operation.
+    init_zero: `bool` if True, initializes scale parameter of batch
+        normalization with 0 instead of 1 (default).
+    data_format: `str` either "channels_first" for `[batch, channels, height,
+        width]` or "channels_last for `[batch, height, width, channels]`.
+
+  Returns:
+    A normalized `Tensor` with the same `data_format`.
+  """
+  if init_zero:
+    gamma_initializer = tf.zeros_initializer()
+  else:
+    gamma_initializer = tf.ones_initializer()
+
+  if data_format == "channels_first":
+    axis = 1
+  else:
+    axis = 3
+
+  inputs = sn(hparams=hparams,
+              inputs=inputs,
+             is_training=is_training,
+             # axis=axis,
+             epsilon=BATCH_NORM_EPSILON,
+             center=True,
+             scale=True,
+             fused=False)
+  return inputs
 
 
 def normalization(inputs,
@@ -88,8 +125,7 @@ def normalization(inputs,
 
         if hparams.is_switchable:
            print("NOT BATCH NORMALIZATION")
-           inputs = switch_norm(inputs, hparams, dataformat=data_format, is_training=is_training, scope='switch_norm')
-
+           inputs = switch_norm(inputs, hparams, is_training, init_zero=init_zero, data_format=data_format)
         else:
            print("BATCH NORMALIZATION")
            inputs = batch_norm(inputs, is_training,  data_format=data_format, init_zero=init_zero)
