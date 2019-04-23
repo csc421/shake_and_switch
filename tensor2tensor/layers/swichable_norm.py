@@ -79,8 +79,8 @@ def compute_stats(x, mean_bn, variance_bn, mean_weights, hparams, is_training, a
     if hparams.original_switchable:
         print("Normalization: Original Switchable Normazliation")
         mean_weights = tf.nn.softmax(mean_weights)
-        mean = tf.add_n([norm_mean_list[i] * mean_weights[i] for i in range(num_branches)])
-        variance = tf.add_n([norm_mean_list[i] * mean_weights[i] for i in range(num_branches)])
+        mean = norm_mean_list[0] * mean_weights[0] + norm_mean_list[1] * mean_weights[1] + norm_mean_list[2] * mean_weights[2]
+        variance = norm_var_list[0] * mean_weights[0] + norm_var_list[1] * mean_weights[1] + norm_var_list[2] * mean_weights[2]
         return mean, variance
     print("Shake Shake Noise has been used")
     rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
