@@ -100,18 +100,22 @@ def compute_stats(x, mean_bn, variance_bn, mean_weights, hparams, is_training, a
             means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
             tf.summary.scalar('lower_bound', means_lower_treshhold)
             means_weights = [(1 - means_lower_treshhold * num_branches) * mean_weights[i] + means_lower_treshhold for i
-                             in
-                             range(num_branches)]
+                             in range(num_branches)]
         rand_forward = [2 * means_weights[i] * rand_forward[i] for i in range(num_branches)]
         rand_backward = [2 * means_weights[i] * rand_backward[i] for i in range(num_branches)]
         rand_eval = mean_weights
         tf.summary.scalar('mean_weights_0_', tf.squeeze(mean_weights[0]))
         tf.summary.scalar('mean_weights_1_', tf.squeeze(mean_weights[1]))
+        tf.summary.scalar('mean_weights_2_', tf.squeeze(mean_weights[2]))
+
 
     total_forward = tf.add_n(rand_forward)
     total_backward = tf.add_n(rand_backward)
     rand_forward_normal = [samp / total_forward for samp in rand_forward]
     rand_backward_normal = [samp / total_backward for samp in rand_backward]
+    rand_backward_normal = rand_forward_normal
+
+
     if is_training:
         tmp_mean_back = norm_mean_list[0] * rand_backward_normal[0] + norm_mean_list[1] * rand_backward_normal[1] + \
                         norm_mean_list[2] * rand_backward_normal[2]
