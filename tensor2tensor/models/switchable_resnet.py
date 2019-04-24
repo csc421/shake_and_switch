@@ -102,12 +102,15 @@ def switch_norm(inputs,
 
   inputs = sn(hparams=hparams,
               inputs=inputs,
-             is_training=is_training,
-             # axis=axis,
-             epsilon=BATCH_NORM_EPSILON,
-             center=True,
-             scale=True,
-             fused=False)
+              axis=axis,
+              momentum=BATCH_NORM_DECAY,
+              epsilon=BATCH_NORM_EPSILON,
+              center=True,
+              scale=True,
+              is_training=is_training,
+              fused=False,
+              gamma_initializer=gamma_initializer
+             )
   return inputs
 
 
@@ -125,7 +128,7 @@ def normalization(inputs,
 
         if hparams.is_switchable:
            print("NOT BATCH NORMALIZATION")
-           inputs = switch_norm(inputs, hparams, is_training, init_zero=init_zero, data_format=data_format)
+           inputs = switch_norm(inputs, hparams, is_training, data_format=data_format, init_zero=init_zero)
         else:
            print("BATCH NORMALIZATION")
            inputs = batch_norm(inputs, is_training,  data_format=data_format, init_zero=init_zero)

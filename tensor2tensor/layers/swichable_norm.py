@@ -38,39 +38,35 @@ def lower_bound_scheduler(step, branch_numbers, train_steps):
     return ratio * base_bound
 
 
-def compute_stats(x, mean_bn, variance_bn, mean_weights, hparams, is_training, axis=None):
+def compute_stats(x, mean_weights, hparams, is_training, mean_bn=None, variance_bn=None, axis=None):
     batch_size = hparams.batch_size
 
     if 3 in axis:
         ch = x.shape[3]
         instance_index = [1, 2]
-        layer_index = [1, 2, 3]
-        # mean_bn = tf.reshape(mean_bn, [1, 1, 1, ch], name='reshape_man1')
-        # variance_bn = tf.reshape(variance_bn, [1, 1, 1, ch], name='reshape_man2')
         running_shape = [1, 1, 1, ch]
     elif 1 in axis:
         ch = x.shape[1]
         instance_index = [2, 3]
-        layer_index = [1, 2, 3]
-        # mean_bn = tf.reshape(mean_bn, [1, ch, 1, 1], name='reshape_man1')
-        # variance_bn = tf.reshape(variance_bn, [1, ch, 1, 1], name='reshape_man2')
         running_shape = [1, ch, 1, 1]
     else:
         raise Exception("Not Defined Axis")
 
     mean_in, variance_in = nn.moments(x, instance_index, keep_dims=True)
-    mean_ln, variance_ln = nn.moments(x, layer_index, keep_dims=True)
+    mean_ln = tf.math.reduce_mean(mean_in, axis=axis[0], keep_dims=True)
 
-    # mean_bn = tf.tile(mean_bn, [batch_size, 1, 1, 1])
-    # variance_bn = tf.tile(variance_bn, [batch_size, 1, 1, 1])
-    # if 3 in axis:
-    #     mean_ln = tf.tile(mean_ln, [1, 1, 1, ch])
-    #     variance_ln = tf.tile(variance_ln, [1, 1, 1, ch])
-    # elif 1 in axis:
-    #     mean_ln = tf.tile(mean_ln, [1, ch, 1, 1])
-    #     variance_ln = tf.tile(variance_ln, [1, ch, 1, 1])
-    # mean_ln = tf.tile(mean_ln, running_shape)
-    # variance_ln = tf.tile(variance_ln, running_shape)
+    temp = variance_in + tf.math.square(mean_in)
+    variance_ln = tf.math.reduce_mean(temp, axis=axis[0], keep_dims=True) - tf.math.square(mean_ln)
+
+    if mean_bn is None or variance_bn is None:
+        mean_bn = tf.math.reduce_mean(mean_in, axis=0, keep_dims=True)
+        variance_bn = tf.math.reduce_mean(temp, axis=0, keep_dims=True) - tf.math.square(mean_bn)
+    else:
+        mean_bn = tf.reshape(mean_bn, running_shape, name='reshape_man1')
+        variance_bn = tf.reshape(variance_bn, running_shape, name='reshape_man2')
+
+    mean_ln = tf.tile(mean_ln, running_shape)
+    variance_ln = tf.tile(variance_ln, running_shape)
 
     norm_mean_list = [mean_bn, mean_in, mean_ln]
     norm_var_list = [variance_bn, variance_in, variance_ln]
@@ -85,8 +81,8 @@ def compute_stats(x, mean_bn, variance_bn, mean_weights, hparams, is_training, a
     print("Shake Shake Noise has been used")
     rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
                     for _ in range(num_branches)]
-    rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
-                     for _ in range(num_branches)]
+    # rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+    #                  for _ in range(num_branches)]
     rand_eval = [1.0 / num_branches] * num_branches
     if not hparams.original_shake_shake:
         print("Normalization: Our Own Switchable Normazliation")
@@ -99,10 +95,10 @@ def compute_stats(x, mean_bn, variance_bn, mean_weights, hparams, is_training, a
             print("Lower bound is acive")
             means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
             tf.summary.scalar('lower_bound', means_lower_treshhold)
-            means_weights = [(1 - means_lower_treshhold * num_branches) * mean_weights[i] + means_lower_treshhold for i
+            mean_weights = [(1 - means_lower_treshhold * num_branches) * mean_weights[i] + means_lower_treshhold for i
                              in range(num_branches)]
-        rand_forward = [2 * means_weights[i] * rand_forward[i] for i in range(num_branches)]
-        rand_backward = [2 * means_weights[i] * rand_backward[i] for i in range(num_branches)]
+        rand_forward = [2 * mean_weights[i] * rand_forward[i] for i in range(num_branches)]
+        # rand_backward = [2 * mean_weights[i] * rand_backward[i] for i in range(num_branches)]
         rand_eval = mean_weights
         tf.summary.scalar('mean_weights_0_', tf.squeeze(mean_weights[0]))
         tf.summary.scalar('mean_weights_1_', tf.squeeze(mean_weights[1]))
@@ -110,11 +106,16 @@ def compute_stats(x, mean_bn, variance_bn, mean_weights, hparams, is_training, a
 
 
     total_forward = tf.add_n(rand_forward)
-    total_backward = tf.add_n(rand_backward)
+    # total_backward = tf.add_n(rand_backward)
     rand_forward_normal = [samp / total_forward for samp in rand_forward]
-    rand_backward_normal = [samp / total_backward for samp in rand_backward]
+    # rand_backward_normal = [samp / total_backward for samp in rand_backward]
     rand_backward_normal = rand_forward_normal
-
+    tf.summary.scalar('weight_0_', tf.squeeze(rand_forward_normal[0][0]))
+    tf.summary.scalar('weight_1_', tf.squeeze(rand_forward_normal[1][0]))
+    tf.summary.scalar('weight_1_', tf.squeeze(rand_forward_normal[2][0]))
+    print('batch mean', mean_bn.shape)
+    print('layer mean', mean_ln.shape)
+    print('instance mean', mean_in.shape)
 
     if is_training:
         tmp_mean_back = norm_mean_list[0] * rand_backward_normal[0] + norm_mean_list[1] * rand_backward_normal[1] + \
@@ -132,7 +133,7 @@ def compute_stats(x, mean_bn, variance_bn, mean_weights, hparams, is_training, a
                           norm_mean_list[2] * rand_eval[2]
         switchable_var = norm_var_list[0] * rand_eval[0] + norm_var_list[1] * rand_eval[1] + \
                          norm_var_list[2] * rand_eval[2]
-    return switchable_mean, switchable_var
+    return switchable_mean, switchable_var, tf.squeeze(mean_bn), tf.squeeze(variance_bn)
 
 def _model_variable_getter(getter,
                            name,
@@ -348,13 +349,12 @@ class SwitchNormalization(Layer):
             # particularly tricky. A compromise might be to just support the most
             # common use case (turning 5D w/ virtual batch to NCHW)
 
-        if self.fused:
-            if self.axis == [1]:
-                self._data_format = 'NCHW'
-            elif self.axis == [3]:
-                self._data_format = 'NHWC'
-            else:
-                raise ValueError('Unsupported axis, fused batch norm only supports '
+        if self.axis == [1]:
+            self._data_format = 'NCHW'
+        elif self.axis == [3]:
+            self._data_format = 'NHWC'
+        else:
+            raise ValueError('Unsupported axis, fused batch norm only supports '
                                  'axis == [1] or axis == [3]')
 
         # Raise parameters of fp16 batch norm to fp32
@@ -559,6 +559,167 @@ class SwitchNormalization(Layer):
 
         return output
 
+    def call(self, inputs, training=None):
+        original_training_value = training
+        if training is None:
+            training = K.learning_phase()
+
+        in_eager_mode = context.executing_eagerly()
+        if self.virtual_batch_size is not None:
+            # Virtual batches (aka ghost batches) can be simulated by reshaping the
+            # Tensor and reusing the existing batch norm implementation
+            original_shape = [-1] + inputs.shape.as_list()[1:]
+            expanded_shape = [self.virtual_batch_size, -1] + original_shape[1:]
+
+            # Will cause errors if virtual_batch_size does not divide the batch size
+            inputs = array_ops.reshape(inputs, expanded_shape)
+
+            def undo_virtual_batching(outputs):
+                outputs = array_ops.reshape(outputs, original_shape)
+                return outputs
+
+        if self.fused:
+            outputs = self._fused_switch_norm(inputs, training=training)
+            if self.virtual_batch_size is not None:
+                # Currently never reaches here since fused_batch_norm does not support
+                # virtual batching
+                outputs = undo_virtual_batching(outputs)
+            if not context.executing_eagerly() and original_training_value is None:
+                outputs._uses_learning_phase = True  # pylint: disable=protected-access
+            return outputs
+
+        # Compute the axes along which to reduce the mean / variance
+        input_shape = inputs.get_shape()
+        ndims = len(input_shape)
+        reduction_axes = [i for i in range(ndims) if i not in self.axis]
+        if self.virtual_batch_size is not None:
+            del reduction_axes[1]  # Do not reduce along virtual batch dim
+
+        # Broadcasting only necessary for single-axis batch norm where the axis is
+        # not the last dimension
+        broadcast_shape = [1] * ndims
+        broadcast_shape[self.axis[0]] = input_shape[self.axis[0]].value
+
+        def _broadcast(v):
+            if (v is not None and
+                    len(v.get_shape()) != ndims and
+                    reduction_axes != list(range(ndims - 1))):
+                return array_ops.reshape(v, broadcast_shape)
+            return v
+
+        scale, offset = _broadcast(self.gamma), _broadcast(self.beta)
+
+        def _compose_transforms(scale, offset, then_scale, then_offset):
+            if then_scale is not None:
+                scale *= then_scale
+                offset *= then_scale
+            if then_offset is not None:
+                offset += then_offset
+            return (scale, offset)
+
+        # Determine a boolean value for `training`: could be True, False, or None.
+
+        training_value = tf_utils.constant_value(training)
+        if training_value is not False:
+            if self.adjustment:
+                adj_scale, adj_bias = self.adjustment(array_ops.shape(inputs))
+                # Adjust only during training.
+                adj_scale = tf_utils.smart_cond(training,
+                                                lambda: adj_scale,
+                                                lambda: array_ops.ones_like(adj_scale))
+                adj_bias = tf_utils.smart_cond(training,
+                                               lambda: adj_bias,
+                                               lambda: array_ops.zeros_like(adj_bias))
+                scale, offset = _compose_transforms(adj_scale, adj_bias, scale, offset)
+
+            # Some of the computations here are not necessary when training==False
+            # but not a constant. However, this makes the code simpler.
+            keep_dims = self.virtual_batch_size is not None or len(self.axis) > 1
+            # _, mean_bn, variance_bn = nn.fused_batch_norm(inputs, scale=tf.ones(shape=[inputs.shape[self.axis[0]]]),
+            #                                               offset=tf.zeros(shape=[inputs.shape[self.axis[0]]]),
+            #                                               epsilon=self.epsilon, data_format=self._data_format)
+            # mean_bn, variance_bn = nn.moments(inputs, reduction_axes, keep_dims=keep_dims)
+            mean, variance, mean_bn, variance_bn = compute_stats(inputs, self.mean_weights, self.hparams, training,
+                                                                 axis=self.axis)
+
+            moving_mean = self.moving_mean
+            moving_variance = self.moving_variance
+
+            mean_bn = tf_utils.smart_cond(training,
+                                       lambda: mean_bn,
+                                       lambda: moving_mean)
+            variance_bn = tf_utils.smart_cond(training,
+                                           lambda: variance_bn,
+                                           lambda: moving_variance)
+
+            if self.virtual_batch_size is not None:
+                # This isn't strictly correct since in ghost batch norm, you are
+                # supposed to sequentially update the moving_mean and moving_variance
+                # with each sub-batch. However, since the moving statistics are only
+                # used during evaluation, it is more efficient to just update in one
+                # step and should not make a significant difference in the result.
+                new_mean = math_ops.reduce_mean(mean_bn, axis=1, keepdims=True)
+                new_variance = math_ops.reduce_mean(variance_bn, axis=1, keepdims=True)
+            else:
+                new_mean, new_variance = mean_bn, variance_bn
+
+            if self.renorm:
+                r, d, new_mean, new_variance = self._renorm_correction_and_moments(
+                    new_mean, new_variance, training)
+                # When training, the normalized values (say, x) will be transformed as
+                # x * gamma + beta without renorm, and (x * r + d) * gamma + beta
+                # = x * (r * gamma) + (d * gamma + beta) with renorm.
+                r = _broadcast(array_ops.stop_gradient(r, name='renorm_r'))
+                d = _broadcast(array_ops.stop_gradient(d, name='renorm_d'))
+                scale, offset = _compose_transforms(r, d, scale, offset)
+
+            def _do_update(var, value):
+                if in_eager_mode and not self.trainable:
+                    return
+
+                return self._assign_moving_average(var, value, self.momentum)
+
+            mean_update = tf_utils.smart_cond(
+                training,
+                lambda: _do_update(self.moving_mean, new_mean),
+                lambda: self.moving_mean)
+            variance_update = tf_utils.smart_cond(
+                training,
+                lambda: _do_update(self.moving_variance, new_variance),
+                lambda: self.moving_variance)
+            if not context.executing_eagerly():
+                self.add_update(mean_update, inputs=True)
+                self.add_update(variance_update, inputs=True)
+            print('input shape', inputs.shape)
+            print('mean shape', mean.shape)
+            print('variance shape', variance.shape)
+
+        else:
+            mean_bn, variance_bn = self.moving_mean, self.moving_variance
+            mean, variance, _, _ = compute_stats(inputs, self.mean_weights, self.hparams, training,
+                                                                 mean_bn=mean_bn,
+                                                                 variance_bn=variance_bn,
+                                                                 axis=self.axis)
+        # sn
+        tf.summary.scalar('running_mean_0_', tf.squeeze(self.moving_mean[0]))
+        tf.summary.scalar('running_var_0_', tf.squeeze(self.moving_variance[0]))
+        tf.summary.scalar('batch_mean_0_', tf.squeeze(mean_bn[0]))
+
+
+
+        outputs = nn.batch_normalization(inputs,
+                                         mean,
+                                         variance,
+                                         offset,
+                                         scale,
+                                         self.epsilon)
+
+        if self.virtual_batch_size is not None:
+            outputs = undo_virtual_batching(outputs)
+        if not context.executing_eagerly() and original_training_value is None:
+            outputs._uses_learning_phase = True  # pylint: disable=protected-access
+        return outputs
+
     def _renorm_correction_and_moments(self, mean, variance, training):
         """Returns the correction and update values for renorm."""
         stddev = math_ops.sqrt(variance + self.epsilon)
@@ -626,152 +787,6 @@ class SwitchNormalization(Layer):
         new_variance = math_ops.square(new_stddev) - self.epsilon
 
         return (r, d, new_mean, new_variance)
-
-    def call(self, inputs, training=None):
-        original_training_value = training
-        if training is None:
-            training = K.learning_phase()
-
-        in_eager_mode = context.executing_eagerly()
-        if self.virtual_batch_size is not None:
-            # Virtual batches (aka ghost batches) can be simulated by reshaping the
-            # Tensor and reusing the existing batch norm implementation
-            original_shape = [-1] + inputs.shape.as_list()[1:]
-            expanded_shape = [self.virtual_batch_size, -1] + original_shape[1:]
-
-            # Will cause errors if virtual_batch_size does not divide the batch size
-            inputs = array_ops.reshape(inputs, expanded_shape)
-
-            def undo_virtual_batching(outputs):
-                outputs = array_ops.reshape(outputs, original_shape)
-                return outputs
-
-        if self.fused:
-            outputs = self._fused_switch_norm(inputs, training=training)
-            if self.virtual_batch_size is not None:
-                # Currently never reaches here since fused_batch_norm does not support
-                # virtual batching
-                outputs = undo_virtual_batching(outputs)
-            if not context.executing_eagerly() and original_training_value is None:
-                outputs._uses_learning_phase = True  # pylint: disable=protected-access
-            return outputs
-
-        # Compute the axes along which to reduce the mean / variance
-        input_shape = inputs.get_shape()
-        ndims = len(input_shape)
-        reduction_axes = [i for i in range(ndims) if i not in self.axis]
-        if self.virtual_batch_size is not None:
-            del reduction_axes[1]  # Do not reduce along virtual batch dim
-
-        # Broadcasting only necessary for single-axis batch norm where the axis is
-        # not the last dimension
-        broadcast_shape = [1] * ndims
-        broadcast_shape[self.axis[0]] = input_shape[self.axis[0]].value
-
-        def _broadcast(v):
-            if (v is not None and
-                    len(v.get_shape()) != ndims and
-                    reduction_axes != list(range(ndims - 1))):
-                return array_ops.reshape(v, broadcast_shape)
-            return v
-
-        scale, offset = _broadcast(self.gamma), _broadcast(self.beta)
-
-        def _compose_transforms(scale, offset, then_scale, then_offset):
-            if then_scale is not None:
-                scale *= then_scale
-                offset *= then_scale
-            if then_offset is not None:
-                offset += then_offset
-            return (scale, offset)
-
-        # Determine a boolean value for `training`: could be True, False, or None.
-        training_value = tf_utils.constant_value(training)
-        if training_value is not False:
-            if self.adjustment:
-                adj_scale, adj_bias = self.adjustment(array_ops.shape(inputs))
-                # Adjust only during training.
-                adj_scale = tf_utils.smart_cond(training,
-                                                lambda: adj_scale,
-                                                lambda: array_ops.ones_like(adj_scale))
-                adj_bias = tf_utils.smart_cond(training,
-                                               lambda: adj_bias,
-                                               lambda: array_ops.zeros_like(adj_bias))
-                scale, offset = _compose_transforms(adj_scale, adj_bias, scale, offset)
-
-            # Some of the computations here are not necessary when training==False
-            # but not a constant. However, this makes the code simpler.
-            keep_dims = self.virtual_batch_size is not None or len(self.axis) > 1
-            mean_bn, variance_bn = nn.moments(inputs, reduction_axes, keep_dims=keep_dims)
-
-            moving_mean = self.moving_mean
-            moving_variance = self.moving_variance
-
-            mean_bn = tf_utils.smart_cond(training,
-                                       lambda: mean_bn,
-                                       lambda: moving_mean)
-            variance_bn = tf_utils.smart_cond(training,
-                                           lambda: variance_bn,
-                                           lambda: moving_variance)
-
-            if self.virtual_batch_size is not None:
-                # This isn't strictly correct since in ghost batch norm, you are
-                # supposed to sequentially update the moving_mean and moving_variance
-                # with each sub-batch. However, since the moving statistics are only
-                # used during evaluation, it is more efficient to just update in one
-                # step and should not make a significant difference in the result.
-                new_mean = math_ops.reduce_mean(mean_bn, axis=1, keepdims=True)
-                new_variance = math_ops.reduce_mean(variance_bn, axis=1, keepdims=True)
-            else:
-                new_mean, new_variance = mean_bn, variance_bn
-
-            if self.renorm:
-                r, d, new_mean, new_variance = self._renorm_correction_and_moments(
-                    new_mean, new_variance, training)
-                # When training, the normalized values (say, x) will be transformed as
-                # x * gamma + beta without renorm, and (x * r + d) * gamma + beta
-                # = x * (r * gamma) + (d * gamma + beta) with renorm.
-                r = _broadcast(array_ops.stop_gradient(r, name='renorm_r'))
-                d = _broadcast(array_ops.stop_gradient(d, name='renorm_d'))
-                scale, offset = _compose_transforms(r, d, scale, offset)
-
-            def _do_update(var, value):
-                if in_eager_mode and not self.trainable:
-                    return
-
-                return self._assign_moving_average(var, value, self.momentum)
-
-            mean_update = tf_utils.smart_cond(
-                training,
-                lambda: _do_update(self.moving_mean, new_mean),
-                lambda: self.moving_mean)
-            variance_update = tf_utils.smart_cond(
-                training,
-                lambda: _do_update(self.moving_variance, new_variance),
-                lambda: self.moving_variance)
-            if not context.executing_eagerly():
-                self.add_update(mean_update, inputs=True)
-                self.add_update(variance_update, inputs=True)
-
-        else:
-            mean_bn, variance_bn = self.moving_mean, self.moving_variance
-        # sn
-        tf.summary.scalar('running_mean_0_', tf.squeeze(self.moving_mean[0]))
-        tf.summary.scalar('running_var_0_', tf.squeeze(self.moving_variance[0]))
-        tf.summary.scalar('batch_mean_0_', tf.squeeze(mean_bn[0]))
-
-        mean, variance = compute_stats(inputs, mean_bn, variance_bn, self.mean_weights, self.hparams, training, axis= [1])
-        outputs = (inputs - mean) / tf.sqrt(variance + self.epsilon)
-        outputs = outputs * scale + offset
-
-        # If some components of the shape got lost due to adjustments, fix that.
-        outputs.set_shape(input_shape)
-
-        if self.virtual_batch_size is not None:
-            outputs = undo_virtual_batching(outputs)
-        if not context.executing_eagerly() and original_training_value is None:
-            outputs._uses_learning_phase = True  # pylint: disable=protected-access
-        return outputs
 
     def compute_output_shape(self, input_shape):
         return input_shape
@@ -869,7 +884,8 @@ class SwitchNorm(SwitchNormalization, base.Layer):
 @slim.add_arg_scope
 def switch_norm(inputs,
                 hparams,
-               decay=0.999,
+                axis=None,
+               momentum=0.999,
                center=True,
                scale=True,
                epsilon=0.001,
@@ -889,6 +905,7 @@ def switch_norm(inputs,
                renorm=False,
                renorm_clipping=None,
                renorm_decay=0.99,
+               gamma_initializer=None,
                adjustment=None):
     layer_variable_getter = _build_variable_getter()
     with variable_scope.variable_scope(
@@ -907,8 +924,6 @@ def switch_norm(inputs,
                 param_initializers = {}
             beta_initializer = param_initializers.get('beta',
                                                       init_ops.zeros_initializer())
-            gamma_initializer = param_initializers.get('gamma',
-                                                       init_ops.ones_initializer())
             moving_mean_initializer = param_initializers.get(
                 'moving_mean', init_ops.zeros_initializer())
             moving_variance_initializer = param_initializers.get(
@@ -917,9 +932,9 @@ def switch_norm(inputs,
                 param_regularizers = {}
             beta_regularizer = param_regularizers.get('beta')
             gamma_regularizer = param_regularizers.get('gamma')
-            layer = SwitchNorm(axis=-1,
+            layer = SwitchNorm(axis=axis,
                                hparams=hparams,
-                               momentum=decay,
+                               momentum=momentum,
                                epsilon=epsilon,
                                center=center,
                                scale=scale,

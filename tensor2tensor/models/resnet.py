@@ -638,7 +638,7 @@ def resnet_base():
   hparams.weight_decay = 1e-4
   hparams.clip_grad_norm = 0.0
   # (base_lr=0.1) * (batch_size=128*8 (on TPU, or 8 GPUs)=1024) / (256.)
-  hparams.learning_rate = 0.4
+  hparams.learning_rate = 0.3
   hparams.learning_rate_decay_scheme = "cosine"
 
   # For image_imagenet224, 120k training steps, which effectively makes this a
