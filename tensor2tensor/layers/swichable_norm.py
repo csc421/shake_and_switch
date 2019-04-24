@@ -38,7 +38,7 @@ def lower_bound_scheduler(step, branch_numbers, train_steps):
     return ratio * base_bound
 
 
-def compute_stats(x, mean_weights, hparams, is_training, mean_bn=None, variance_bn=None, axis=None):
+def compute_stats(x, mean_weights, var_weights, hparams, is_training, mean_bn=None, variance_bn=None, axis=None):
     batch_size = hparams.batch_size
 
     if 3 in axis:
@@ -53,8 +53,8 @@ def compute_stats(x, mean_weights, hparams, is_training, mean_bn=None, variance_
         raise Exception("Not Defined Axis")
 
     mean_in, variance_in = nn.moments(x, instance_index, keep_dims=True)
-    mean_ln = tf.math.reduce_mean(mean_in, axis=axis[0], keep_dims=True)
 
+    mean_ln = tf.math.reduce_mean(mean_in, axis=axis[0], keep_dims=True)
     temp = variance_in + tf.math.square(mean_in)
     variance_ln = tf.math.reduce_mean(temp, axis=axis[0], keep_dims=True) - tf.math.square(mean_ln)
 
@@ -75,64 +75,85 @@ def compute_stats(x, mean_weights, hparams, is_training, mean_bn=None, variance_
     if hparams.original_switchable:
         print("Normalization: Original Switchable Normazliation")
         mean_weights = tf.nn.softmax(mean_weights)
+        var_weights = tf.nn.softmax(var_weights)
+        print('mean weights shape', mean_weights.shape)
         mean = norm_mean_list[0] * mean_weights[0] + norm_mean_list[1] * mean_weights[1] + norm_mean_list[2] * mean_weights[2]
-        variance = norm_var_list[0] * mean_weights[0] + norm_var_list[1] * mean_weights[1] + norm_var_list[2] * mean_weights[2]
-        return mean, variance
+        variance = norm_var_list[0] * var_weights[0] + norm_var_list[1] * var_weights[1] + norm_var_list[2] * var_weights[2]
+        return mean, variance, tf.squeeze(mean_bn), tf.squeeze(variance_bn)
     print("Shake Shake Noise has been used")
-    rand_forward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+    rand_forward_mean = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
+                    for _ in range(num_branches)]
+    rand_forward_var = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
                     for _ in range(num_branches)]
     # rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
     #                  for _ in range(num_branches)]
-    rand_eval = [1.0 / num_branches] * num_branches
+    rand_eval_mean = [1.0 / num_branches] * num_branches
+    rand_eval_var = [1.0 / num_branches] * num_branches
     if not hparams.original_shake_shake:
         print("Normalization: Our Own Switchable Normazliation")
         # means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1]) for i in range(num_branches)]
         mean_weights = [tf.math.abs(x) for x in mean_weights]
         mean_weights_sum = tf.add_n(mean_weights)
         mean_weights = [x / mean_weights_sum for x in mean_weights]
+        var_weights = [tf.math.abs(x) for x in var_weights]
+        var_weights_sum = tf.add_n(var_weights)
+        var_weights = [x / var_weights_sum for x in var_weights]
         step = tf.to_float(tf.train.get_or_create_global_step())
         if hparams.weight_lower_bound:
             print("Lower bound is acive")
-            means_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
-            tf.summary.scalar('lower_bound', means_lower_treshhold)
-            mean_weights = [(1 - means_lower_treshhold * num_branches) * mean_weights[i] + means_lower_treshhold for i
+            weights_lower_treshhold = lower_bound_scheduler(step, num_branches, hparams.train_steps)
+            tf.summary.scalar('lower_bound', weights_lower_treshhold)
+            mean_weights = [(1 - weights_lower_treshhold * num_branches) * mean_weights[i] + weights_lower_treshhold for i
                              in range(num_branches)]
-        rand_forward = [2 * mean_weights[i] * rand_forward[i] for i in range(num_branches)]
+            var_weights = [(1 - weights_lower_treshhold * num_branches) * var_weights[i] + weights_lower_treshhold for
+                            i in range(num_branches)]
+        rand_forward_mean = [2 * mean_weights[i] * rand_forward_mean[i] for i in range(num_branches)]
+        rand_forward_var = [2 * var_weights[i] * rand_forward_var[i] for i in range(num_branches)]
         # rand_backward = [2 * mean_weights[i] * rand_backward[i] for i in range(num_branches)]
-        rand_eval = mean_weights
+        rand_eval_mean = mean_weights
+        rand_eval_var = var_weights
         tf.summary.scalar('mean_weights_0_', tf.squeeze(mean_weights[0]))
         tf.summary.scalar('mean_weights_1_', tf.squeeze(mean_weights[1]))
         tf.summary.scalar('mean_weights_2_', tf.squeeze(mean_weights[2]))
+        tf.summary.scalar('var_weights_0_', tf.squeeze(var_weights[0]))
+        tf.summary.scalar('var_weights_1_', tf.squeeze(var_weights[1]))
+        tf.summary.scalar('var_weights_2_', tf.squeeze(var_weights[2]))
 
 
-    total_forward = tf.add_n(rand_forward)
-    # total_backward = tf.add_n(rand_backward)
-    rand_forward_normal = [samp / total_forward for samp in rand_forward]
-    # rand_backward_normal = [samp / total_backward for samp in rand_backward]
-    rand_backward_normal = rand_forward_normal
-    tf.summary.scalar('weight_0_', tf.squeeze(rand_forward_normal[0][0]))
-    tf.summary.scalar('weight_1_', tf.squeeze(rand_forward_normal[1][0]))
-    tf.summary.scalar('weight_1_', tf.squeeze(rand_forward_normal[2][0]))
+    total_forward_mean = tf.add_n(rand_forward_mean)
+    total_forward_var = tf.add_n(rand_forward_var)
+    # total_backward = tf.add_n(rand_mean_backward)
+    rand_forward_mean_normal = [samp / total_forward_mean for samp in rand_forward_mean]
+    # rand_backward_mean_normal = [samp / total_backward for samp in rand_mean_backward]
+    rand_backward_mean_normal = rand_forward_mean_normal
+
+    rand_forward_var_normal = [samp / total_forward_var for samp in rand_forward_var]
+    # rand_backward_var_normal = [samp / total_backward_var for samp in rand_var_backward]
+    rand_backward_var_normal = rand_forward_var_normal
+
+    tf.summary.scalar('weight_0_', tf.squeeze(rand_forward_mean_normal[0][0]))
+    tf.summary.scalar('weight_1_', tf.squeeze(rand_forward_mean_normal[1][0]))
+    tf.summary.scalar('weight_1_', tf.squeeze(rand_forward_mean_normal[2][0]))
     print('batch mean', mean_bn.shape)
     print('layer mean', mean_ln.shape)
     print('instance mean', mean_in.shape)
 
     if is_training:
-        tmp_mean_back = norm_mean_list[0] * rand_backward_normal[0] + norm_mean_list[1] * rand_backward_normal[1] + \
-                        norm_mean_list[2] * rand_backward_normal[2]
-        tmp_mean_forw = norm_mean_list[0] * rand_forward_normal[0] + norm_mean_list[1] * rand_forward_normal[1] + \
-                        norm_mean_list[2] * rand_forward_normal[2]
+        tmp_mean_back = norm_mean_list[0] * rand_backward_mean_normal[0] + norm_mean_list[1] * rand_backward_mean_normal[1] + \
+                        norm_mean_list[2] * rand_backward_mean_normal[2]
+        tmp_mean_forw = norm_mean_list[0] * rand_forward_mean_normal[0] + norm_mean_list[1] * rand_forward_mean_normal[1] + \
+                        norm_mean_list[2] * rand_forward_mean_normal[2]
         switchable_mean = tmp_mean_back + tf.stop_gradient(tmp_mean_forw - tmp_mean_back)
-        tmp_var_back = norm_var_list[0] * rand_backward_normal[0] + norm_var_list[1] * rand_backward_normal[1] + \
-                       norm_var_list[2] * rand_backward_normal[2]
-        tmp_var_forw = norm_var_list[0] * rand_forward_normal[0] + norm_var_list[1] * rand_forward_normal[1] + \
-                       norm_var_list[2] * rand_forward_normal[2]
+        tmp_var_back = norm_var_list[0] * rand_backward_var_normal[0] + norm_var_list[1] * rand_backward_var_normal[1] + \
+                       norm_var_list[2] * rand_backward_var_normal[2]
+        tmp_var_forw = norm_var_list[0] * rand_forward_var_normal[0] + norm_var_list[1] * rand_forward_var_normal[1] + \
+                       norm_var_list[2] * rand_forward_var_normal[2]
         switchable_var = tmp_var_back + tf.stop_gradient(tmp_var_forw - tmp_var_back)
     else:
-        switchable_mean = norm_mean_list[0] * rand_eval[0] + norm_mean_list[1] * rand_eval[1] + \
-                          norm_mean_list[2] * rand_eval[2]
-        switchable_var = norm_var_list[0] * rand_eval[0] + norm_var_list[1] * rand_eval[1] + \
-                         norm_var_list[2] * rand_eval[2]
+        switchable_mean = norm_mean_list[0] * rand_eval_mean[0] + norm_mean_list[1] * rand_eval_mean[1] + \
+                          norm_mean_list[2] * rand_eval_mean[2]
+        switchable_var = norm_var_list[0] * rand_eval_var[0] + norm_var_list[1] * rand_eval_var[1] + \
+                         norm_var_list[2] * rand_eval_var[2]
     return switchable_mean, switchable_var, tf.squeeze(mean_bn), tf.squeeze(variance_bn)
 
 def _model_variable_getter(getter,
@@ -416,8 +437,8 @@ class SwitchNormalization(Layer):
                     0.0, dtype=param_dtype, shape=param_shape)
 
         # sn weight
-        self.mean_weights = [tf.get_variable('means_{}'.format(i), shape=[1, 1, 1, 1]) for i in range(3)]
-
+        self.mean_weights = [tf.get_variable('means_{}'.format(i), shape=[1, 1, 1, 1], initializer=initializers.get('ones')) for i in range(3)]
+        self.var_weights = [tf.get_variable('var_{}'.format(i), shape=[1, 1, 1, 1], initializer=initializers.get('ones')) for i in range(3)]
         # self.mean_weight = slim.model_variable('mean_weight', shape=[3], initializer=tf.constant_initializer(1.0))
         # self.mean_weight = self.add_variable(
         #     name='mean_weight',
@@ -639,7 +660,7 @@ class SwitchNormalization(Layer):
             #                                               offset=tf.zeros(shape=[inputs.shape[self.axis[0]]]),
             #                                               epsilon=self.epsilon, data_format=self._data_format)
             # mean_bn, variance_bn = nn.moments(inputs, reduction_axes, keep_dims=keep_dims)
-            mean, variance, mean_bn, variance_bn = compute_stats(inputs, self.mean_weights, self.hparams, training,
+            mean, variance, mean_bn, variance_bn = compute_stats(inputs, self.mean_weights, self.var_weights, self.hparams, training,
                                                                  axis=self.axis)
 
             moving_mean = self.moving_mean
@@ -696,7 +717,7 @@ class SwitchNormalization(Layer):
 
         else:
             mean_bn, variance_bn = self.moving_mean, self.moving_variance
-            mean, variance, _, _ = compute_stats(inputs, self.mean_weights, self.hparams, training,
+            mean, variance, _, _ = compute_stats(inputs, self.mean_weights, self.var_weights, self.hparams, training,
                                                                  mean_bn=mean_bn,
                                                                  variance_bn=variance_bn,
                                                                  axis=self.axis)
