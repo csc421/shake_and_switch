@@ -136,6 +136,10 @@ flags.DEFINE_bool("weight_lower_bound", False,
 flags.DEFINE_bool("original_shake_shake", False,
                   "Use original shake shake")
 
+flags.DEFINE_bool("switch_grads", False,
+                  "switch the gradients for branches")
+
+
 flags.DEFINE_bool("relu_first", False,
                   "Relu first")
 
@@ -215,6 +219,7 @@ def create_experiment_fn():
       std_server_protocol=FLAGS.std_server_protocol,
       weight_lower_bound=FLAGS.weight_lower_bound,
       original_shake_shake=FLAGS.original_shake_shake,
+      switch_grads=FLAGS.switch_grads,
       relu_first = FLAGS.relu_first,
       is_switchable = FLAGS.is_switchable,
       original_switchable=FLAGS.original_switchable

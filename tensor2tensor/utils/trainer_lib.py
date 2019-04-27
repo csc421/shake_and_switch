@@ -679,6 +679,7 @@ def create_experiment(
     std_server_protocol=None,
     weight_lower_bound=False,
     original_shake_shake=False,
+    switch_grads=False,
     relu_first=False,
     is_switchable=True,
     original_switchable=False
@@ -696,6 +697,7 @@ def create_experiment(
   hparams.add_hparam("eval_timeout_mins", eval_timeout_mins)
   hparams.add_hparam("weight_lower_bound", weight_lower_bound)
   hparams.add_hparam("original_shake_shake", original_shake_shake)
+  hparams.add_hparam("switch_grads", switch_grads)
   hparams.add_hparam("relu_first", relu_first)
   hparams.add_hparam("is_switchable", is_switchable)
   hparams.add_hparam("original_switchable", original_switchable)

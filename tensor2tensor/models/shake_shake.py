@@ -24,6 +24,7 @@ from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
 from pprint import pprint
 import tensorflow as tf
+from tensorflow.python.keras import initializers
 
 
 def shake_shake_skip_connection(x, output_filters, stride, is_training):
@@ -76,6 +77,8 @@ def shake_shake_branch(x, output_filters, stride, rand_forward, rand_backward, r
 
 def shake_shake_block(x, output_filters, stride, hparams):
   """Builds a full shake-shake sub layer."""
+  print('Original ShakeShake',hparams.original_shake_shake)
+  print('Gradient switch',hparams.switch_grads)
   is_training = hparams.mode == tf.estimator.ModeKeys.TRAIN
   batch_size = common_layers.shape_list(x)[0]
   num_branches = hparams.shake_shake_num_branches
@@ -84,7 +87,7 @@ def shake_shake_block(x, output_filters, stride, hparams):
   rand_backward = [tf.random_uniform([batch_size, 1, 1, 1], minval=0, maxval=1, dtype=tf.float32)
                    for _ in range(num_branches)]
   if not hparams.original_shake_shake:
-    means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1])
+    means = [tf.get_variable('normalize_means_{}'.format(i), shape=[1, 1, 1, 1], initializer=initializers.get('ones'))
              for i in range(num_branches)]
     means = [tf.math.abs(x) for x in means]
     means_sum = tf.add_n(means)
@@ -121,8 +124,26 @@ def shake_shake_block(x, output_filters, stride, hparams):
     with tf.variable_scope("branch_{}".format(branch)):
       b = shake_shake_branch(x, output_filters, stride, r_forward, r_backward,r_eval,
                              hparams)
-      b = tf.nn.dropout(b, 1.0 - hparams.layer_prepostprocess_dropout)
       branches.append(b)
+
+
+  if hparams.switch_grads:
+    new_branches = []
+    for b1,b2 in zip(branches,[branches[1], branches[0]]):
+      with tf.variable_scope("branch_{}".format(b1)):
+        new_branches.append(b2+tf.stop_gradient(b1-b2))
+    branches = new_branches
+
+  new_branches = []
+  for b in branches:
+    with tf.variable_scope("branch_{}".format(branch)):
+      b = tf.nn.dropout(b, 1.0 - hparams.layer_prepostprocess_dropout)
+      new_branches.append(b)
+  branches = new_branches
+
+
+
+
   res = shake_shake_skip_connection(x, output_filters, stride, is_training)
   if hparams.shake_shake_concat:
     concat_values = [res] + branches
@@ -163,6 +184,7 @@ class ShakeShake(t2t_model.T2TModel):
   """
 
   def body(self, features):
+    print("#Gradient switch", self.hparams.switch_grads)
     hparams = self._hparams
     is_training = hparams.mode == tf.estimator.ModeKeys.TRAIN
     inputs = features["inputs"]
